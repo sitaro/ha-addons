@@ -1,0 +1,24 @@
+configuration:
+  zeitplan:
+    name: Startzeit
+    description: Täglicher Start des Backups (HH:MM).
+  versuche_bis:
+    name: Versuche bis
+    description: Ist das iPhone nicht erreichbar, wird alle 15 Minuten erneut versucht – bis zu dieser Uhrzeit.
+  backup_passwort:
+    name: Backup-Passwort
+    description: Passwort der iOS-Backup-Verschlüsselung. Wird nur benutzt, um die Verschlüsselung einmalig einzuschalten. Unbedingt zusätzlich in 1Password ablegen – ohne dieses Passwort ist das Backup nicht wiederherstellbar.
+  onedrive_token:
+    name: OneDrive-Token
+    description: Ausgabe von `rclone authorize "onedrive"` (das JSON in geschweiften Klammern).
+  onedrive_drive_id:
+    name: OneDrive Drive-ID
+    description: Leer lassen – wird automatisch ermittelt.
+  onedrive_drive_type:
+    name: OneDrive-Typ
+  ziel:
+    name: Zielordner
+    description: Ordner im OneDrive.
+  behalten:
+    name: Anzahl Backups
+    description: So viele Backups bleiben im OneDrive, ältere werden gelöscht.
