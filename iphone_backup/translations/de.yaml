@@ -10,7 +10,7 @@ configuration:
     description: Passwort der iOS-Backup-Verschlüsselung. Wird nur benutzt, um die Verschlüsselung einmalig einzuschalten. Unbedingt zusätzlich in 1Password ablegen – ohne dieses Passwort ist das Backup nicht wiederherstellbar.
   onedrive_token:
     name: OneDrive-Token
-    description: Ausgabe von `rclone authorize "onedrive"` (das JSON in geschweiften Klammern).
+    description: Optional. Leer = Upload über die OneDrive-Integration von Home Assistant. Mit Token (Ausgabe von `rclone authorize "onedrive"`) wird rclone verwendet.
   onedrive_drive_id:
     name: OneDrive Drive-ID
     description: Leer lassen – wird automatisch ermittelt.
@@ -18,7 +18,7 @@ configuration:
     name: OneDrive-Typ
   ziel:
     name: Zielordner
-    description: Ordner im OneDrive.
+    description: Zielordner; bei der OneDrive-Integration relativ zu deren App-Ordner.
   behalten:
     name: Anzahl Backups
     description: So viele Backups bleiben im OneDrive, ältere werden gelöscht.

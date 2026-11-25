@@ -1,7 +1,7 @@
 name: iPhone Backup
-version: "0.1.3"
+version: "0.2.0"
 slug: iphone_backup
-description: Verschlüsselte iPhone-Backups (pymobiledevice3) direkt nach OneDrive
+description: Verschlüsselte iPhone-Backups (pymobiledevice3) direkt nach OneDrive – über die OneDrive-Integration oder rclone
 url: https://github.com/sitaro/ha-addons/tree/main/iphone_backup
 arch:
   - amd64
@@ -12,6 +12,9 @@ host_network: true
 usb: true
 stdin: true
 homeassistant_api: true
+map:
+  - type: share
+    read_only: false
 backup_exclude:
   - "*"
 options:
@@ -21,13 +24,13 @@ options:
   onedrive_token: ""
   onedrive_drive_id: ""
   onedrive_drive_type: personal
-  ziel: Backup/iphone
+  ziel: iphone
   behalten: 3
 schema:
   zeitplan: match(^([01]\d|2[0-3]):[0-5]\d$)
   versuche_bis: match(^([01]\d|2[0-3]):[0-5]\d$)
   backup_passwort: password
-  onedrive_token: password
+  onedrive_token: password?
   onedrive_drive_id: str?
   onedrive_drive_type: list(personal|business|documentLibrary)
   ziel: str

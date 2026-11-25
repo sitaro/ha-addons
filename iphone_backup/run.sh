@@ -110,11 +110,62 @@ verschluesselung_pruefen() {
   echo "$aus" | grep -qiE '\bon\b|true|enabled|aktiv' || { bashio::log.error "Verschlüsselung nicht aktiv: $aus"; return 1; }
 }
 
+# ---------- Ziel / Upload ----------
+METHODE=ha
+OD_ENTRY=""
+UPLOAD_DIR=/share/iphone_backup_upload
+TEIL_GROESSE=240M   # Integration erlaubt max. 250 MB pro Datei
+
+ha_api() { # methode pfad [json] [timeout]
+  curl -s --max-time "${4:-60}" -X "$1" -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
+    -H "Content-Type: application/json" ${3:+-d "$3"} "http://supervisor/core/api$2"
+}
+ziel_pruefen() {
+  local token; token=$(bashio::config onedrive_token)
+  if [ -n "$token" ] && [ "$token" != "null" ]; then METHODE=rclone; rclone_setup; return; fi
+  METHODE=ha
+  OD_ENTRY=$(ha_api GET "/config/config_entries/entry?domain=onedrive" | jq -r '[.[]|select(.state=="loaded")][0].entry_id // empty')
+  [ -n "$OD_ENTRY" ] || { bashio::log.error "Keine geladene OneDrive-Integration in Home Assistant gefunden (oder OneDrive-Token eintragen)."; return 1; }
+  mkdir -p "$UPLOAD_DIR"
+}
+upload_rclone() { # $1 = Basisname
+  local datei="$1.tar"
+  tar --remove-files -C "$STAGING" -cf "/tmp/$datei" . || return 1
+  rc copyto "/tmp/$datei" "onedrive:${ZIEL}/${datei}" --onedrive-chunk-size 50M --retries 5 --low-level-retries 20 > /tmp/upload.log 2>&1 \
+    || { bashio::log.error "Upload fehlgeschlagen: $(tail -5 /tmp/upload.log)"; rm -f "/tmp/$datei"; return 1; }
+  rm -f "/tmp/$datei"
+  rc lsf "onedrive:${ZIEL}" --include "iphone-*.tar" | sort | head -n -"$BEHALTEN" | while read -r alt; do
+    rc deletefile "onedrive:${ZIEL}/${alt}" && bashio::log.info "Altes Backup gelöscht: $alt"
+  done
+}
+upload_ha() { # $1 = Basisname → Ordner <ziel>/<basis>/ im App-Ordner der Integration, Teile à 240 MB
+  local basis="$1"
+  export OD_ENTRY UPLOAD_DIR ORDNER="${ZIEL}/${basis}"
+  printf 'iPhone-Backup %s (verschlüsselt, Format Finder/iTunes)\n\nWiederherstellen:\n  cat %s.tar.part* > %s.tar\n  tar -xf %s.tar\n  danach mit Finder/iTunes oder pymobiledevice3 backup2 restore einspielen.\n' \
+    "$basis" "$basis" "$basis" "$basis" > "$UPLOAD_DIR/LIESMICH.txt"
+  /upload_teil.sh < /dev/null "$UPLOAD_DIR/LIESMICH.txt" || return 1
+  tar --remove-files -C "$STAGING" -cf - . \
+    | split -b "$TEIL_GROESSE" -d -a 4 --filter='/upload_teil.sh "$FILE"' - "${basis}.tar.part" \
+    || { bashio::log.error "Upload abgebrochen."; return 1; }
+  echo "$basis" >> /data/uploads.txt
+  # Alte Stände löschen
+  local anzahl; anzahl=$(wc -l < /data/uploads.txt)
+  while [ "$anzahl" -gt "$BEHALTEN" ]; do
+    local alt; alt=$(head -1 /data/uploads.txt)
+    if ha_api POST /services/onedrive/delete "$(jq -nc --arg e "$OD_ENTRY" --arg p "${ZIEL}/${alt}" '{config_entry_id:$e, destination_path:[$p]}')" 300 >/dev/null; then
+      bashio::log.info "Altes Backup gelöscht: $alt"
+    else
+      bashio::log.warning "Löschen von $alt fehlgeschlagen."
+    fi
+    sed -i 1d /data/uploads.txt; anzahl=$((anzahl-1))
+  done
+}
+
 # ---------- Backup ----------
 backup() {
   exec 9>"$LOCK"; flock -n 9 || { bashio::log.warning "Backup läuft bereits."; return 2; }
   local start; start=$(date +%s)
-  rclone_setup || { status_set fehler "OneDrive nicht eingerichtet"; return 1; }
+  ziel_pruefen || { status_set fehler "OneDrive nicht eingerichtet"; return 1; }
   geraet_finden || { status_set wartet "iPhone nicht erreichbar"; return 3; }
   verschluesselung_pruefen || { status_set fehler "Backup nicht verschlüsselt – nichts hochgeladen"; return 1; }
 
@@ -128,21 +179,15 @@ backup() {
   local udid groesse datei
   udid=$(ls "$STAGING" | head -1)
   groesse=$(du -sb "$STAGING" | cut -f1)
-  datei="iphone-${udid:0:8}-$(date +%Y-%m-%d_%H%M).tar"
-  bashio::log.info "Backup fertig ($(numfmt --to=iec "$groesse")), packe und lade nach OneDrive:${ZIEL}/${datei} …"
+  datei="iphone-${udid:0:8}-$(date +%Y-%m-%d_%H%M)"
+  bashio::log.info "Backup fertig ($(numfmt --to=iec "$groesse")), lade nach OneDrive (${METHODE}) …"
   status_set laeuft "Upload nach OneDrive"
-  if ! tar --remove-files -C "$STAGING" -cf "/tmp/$datei" . ; then
-    rm -rf "$STAGING" /tmp/*.tar; status_set fehler "Packen fehlgeschlagen"; return 1
+  if [ "$METHODE" = rclone ]; then
+    upload_rclone "$datei" || { rm -rf "$STAGING" /tmp/*.tar; status_set fehler "Upload nach OneDrive fehlgeschlagen"; return 1; }
+  else
+    upload_ha "$datei" || { rm -rf "$STAGING" "$UPLOAD_DIR"/*; status_set fehler "Upload nach OneDrive fehlgeschlagen"; return 1; }
   fi
-  if ! rc copyto "/tmp/$datei" "onedrive:${ZIEL}/${datei}" --onedrive-chunk-size 50M --retries 5 --low-level-retries 20 > /tmp/upload.log 2>&1; then
-    bashio::log.error "Upload fehlgeschlagen: $(tail -5 /tmp/upload.log)"
-    rm -f "/tmp/$datei"; status_set fehler "Upload nach OneDrive fehlgeschlagen"; return 1
-  fi
-  rm -f "/tmp/$datei"
-  # Alte Stände löschen
-  rc lsf "onedrive:${ZIEL}" --include "iphone-*.tar" | sort | head -n -"$BEHALTEN" | while read -r alt; do
-    rc deletefile "onedrive:${ZIEL}/${alt}" && bashio::log.info "Altes Backup gelöscht: $alt"
-  done
+  rm -rf "$STAGING"
   local dauer=$(( ($(date +%s) - start) / 60 ))
   bashio::log.info "Fertig: ${datei} in ${dauer} min."
   status_set ok "Backup hochgeladen" --arg letzter_erfolg "$(date -Iseconds)" --arg datei "$datei" \
@@ -170,7 +215,7 @@ zeitplan_schleife() {
 bashio::log.info "iPhone Backup startet (Zeitplan ${ZEITPLAN}, Ziel OneDrive:${ZIEL}, behalten ${BEHALTEN})."
 /usr/sbin/usbmuxd -f -U usbmux >/tmp/usbmuxd.log 2>&1 &
 sleep 2
-rclone_setup || true
+ziel_pruefen >/dev/null 2>&1 || true
 [ -s "$STATUS" ] && status_push || status_set bereit "Noch kein Backup"
 
 zeitplan_schleife &
@@ -182,7 +227,18 @@ while read -r befehl; do
     koppeln) koppeln ;;
     backup)  backup ;;
     status)  status_push ;;
-    *) bashio::log.warning "Unbekannter Befehl: ${befehl} (koppeln|backup|status)" ;;
+    testupload)
+      if ziel_pruefen; then
+        if [ "$METHODE" = ha ]; then
+          export OD_ENTRY UPLOAD_DIR ORDNER="${ZIEL}/test"
+          echo "Testdatei $(date -Iseconds)" > "$UPLOAD_DIR/test.txt"
+          /upload_teil.sh "$UPLOAD_DIR/test.txt" && bashio::log.info "Testupload ok: ${ZIEL}/test/test.txt im App-Ordner der OneDrive-Integration." \
+            || bashio::log.error "Testupload fehlgeschlagen."
+        else
+          echo "Testdatei" | rc rcat "onedrive:${ZIEL}/test.txt" && bashio::log.info "Testupload (rclone) ok."
+        fi
+      fi ;;
+    *) bashio::log.warning "Unbekannter Befehl: ${befehl} (koppeln|backup|status|testupload)" ;;
   esac
 done
 wait

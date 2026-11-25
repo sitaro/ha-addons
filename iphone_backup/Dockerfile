@@ -14,6 +14,6 @@ RUN apt-get update \
  && apt-get purge -y build-essential python3-dev && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/*
 
-COPY run.sh /run.sh
-RUN chmod +x /run.sh
+COPY run.sh upload_teil.sh /
+RUN chmod +x /run.sh /upload_teil.sh
 CMD ["/run.sh"]
